@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Neon Cyber Dash 2D</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050508;
+            overflow: hidden;
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+
+        #gameCanvas {
+            display: block;
+            margin: 0 auto;
+            background: radial-gradient(circle at center, #0d0b21 0%, #050508 100%);
+            box-shadow: 0 0 50px rgba(0, 242, 254, 0.15);
+        }
+
+        /* Стильный верхний интерфейс */
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #fff;
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            pointer-events: none;
+            display: flex;
+            gap: 50px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 10px 25px;
+            border-radius: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(5px);
+        }
+
+        .score span { color: #00f2fe; }
+        .best span { color: #ff007f; }
+    </style>
+</head>
+<body>
+
+    <div class="ui-panel">
+        <div class="score">Очки: <span id="score">0</span></div>
+        <div class="best">Рекорд: <span id="bestScore">0</span></div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth > 600 ? 500 : window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // Состояние игры
+        let score = 0;
+        let bestScore = localStorage.getItem('cyberDashBest') || 0;
+        document.getElementById('bestScore').innerText = bestScore;
+
+        let isGameOver = false;
+        let gameSpeed = 4.5;
+        let globalTime = 0;
+
+        // Игрок
+        const player = {
+            x: 90,
+            y: canvas.height / 2,
+            radius: 14,
+            velocity: 0,
+            gravity: 0.42,
+            jumpPower: -7.8,
+            color: '#00f2fe',
+            trail: [] // Массив для красивого шлейфа за шаром
+        };
+
+        // Списки объектов
+        let obstacles = [];
+        let crystals = [];
+        let particles = []; // Эффекты взрыва при сборе кристаллов
+
+        // Интерактивная кнопка перезапуска прямо на Canvas
+        const restartBtnBox = { x: 0, y: 0, w: 180, h: 50 };
+
+        function jump() {
+            if (isGameOver) return;
+            player.velocity = player.jumpPower;
+        }
+
+        // Слушатели управления
+        window.addEventListener('mousedown', handleAction);
+        window.addEventListener('touchstart', (e) => {
+            handleAction(e.changedTouches[0]);
+            e.preventDefault();
+        }, { passive: false });
+
+        function handleAction(e) {
+            if (isGameOver) {
+                // Проверяем, нажал ли пользователь на кнопку "Заново"
+                const rect = canvas.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const clickY = e.clientY - rect.top;
+
+                if (
+                    clickX > restartBtnBox.x && clickX < restartBtnBox.x + restartBtnBox.w &&
+                    clickY > restartBtnBox.y && clickY < restartBtnBox.y + restartBtnBox.h
+                ) {
+                    resetGame();
+                }
+                return;
+            }
+            jump();
+        }
+
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 10; i++) {
+                particles.push({
+                    x: x, y: y,
+                    vx: (Math.random() - 0.5) * 6,
+                    vy: (Math.random() - 0.5) * 6,
+                    radius: Math.random() * 3 + 1,
+                    alpha: 1,
+                    color: color
+                });
+            }
+        }
+
+        function update() {
+            globalTime++;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (!isGameOver) {
+                // Физика шара
+                player.velocity += player.gravity;
+                player.y += player.velocity;
+
+                if (player.y - player.radius < 0) { player.y = player.radius; player.velocity = 0; }
+                if (player.y + player.radius > canvas.height) { gameOver(); }
+
+                // Запись траектории хвоста
+                player.trail.push({ x: player.x, y: player.y });
+                if (player.trail.length > 12) player.trail.shift();
+
+                // Спавн логика
+                if (globalTime % Math.max(35, 80 - Math.floor(score * 1.5)) === 0) {
+                    const h = Math.random() * (50 - 20) + 20;
+                    const py = Math.random() * (canvas.height - 120) + 60;
+                    
+                    obstacles.push({
+                        x: canvas.width + 50, y: py,
+                        w: h, h: h,
+                        pulsePhase: Math.random() * 10,
+                        color: '#ff0055'
+                    });
+
+                    if (Math.random() > 0.3) {
+                        crystals.push({
+                            x: canvas.width + 130,
+                            y: py + (Math.random() > 0.5 ? -70 : 70),
+                            size: 7,
+                            color: '#39ff14'
+                        });
+                    }
+                }
+            }
+
+            // 1. Отрисовка хвоста игрока (Неоновый шлейф)
+            for (let i = 0; i < player.trail.length; i++) {
+                let ratio = i / player.trail.length;
+                ctx.beginPath();
+                ctx.arc(player.trail[i].x, player.trail[i].y, player.radius * ratio, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(0, 242, 254, ${ratio * 0.25})`;
+                ctx.fill();
+            }
+
+            // 2. Отрисовка самого игрока
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fillStyle = player.color;
+            ctx.shadowBlur = 18;
+            ctx.shadowColor = player.color;
+            ctx.fill();
+            ctx.restore();
+
+            // 3. Движение и логика препятствий
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                if (!isGameOver) obs.x -= gameSpeed;
+
+                // Пульсация размера для интереса
+                let pulse = Math.sin(globalTime * 0.07 + obs.pulsePhase) * 4;
+                let finalW = obs.w + pulse;
+
+                ctx.save();
+                ctx.fillStyle = obs.color;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = obs.color;
+                ctx.fillRect(obs.x - pulse/2, obs.y - pulse/2, finalW, finalW);
+                ctx.restore();
+
+                // Столкновение
+                if (
+                    player.x + player.radius > obs.x - pulse/2 &&
+                    player.x - player.radius < obs.x - pulse/2 + finalW &&
+                    player.y + player.radius > obs.y - pulse/2 &&
+                    player.y - player.radius < obs.y - pulse/2 + finalW
+                ) {
+                    gameOver();
+                }
+
+                if (obs.x + obs.w < 0) obstacles.splice(i, 1);
+            }
+
+            // 4. Движение и сбор кристаллов
+            for (let j = crystals.length - 1; j >= 0; j--) {
+                let cry = crystals[j];
+                if (!isGameOver) cry.x -= gameSpeed;
+
+                ctx.save();
+                ctx.fillStyle = cry.color;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = cry.color;
+                ctx.beginPath();
+                ctx.translate(cry.x, cry.y);
+                ctx.rotate(globalTime * 0.04);
+                ctx.fillRect(-cry.size, -cry.size, cry.size * 2, cry.size * 2);
+                ctx.restore();
+
+                if (Math.hypot(player.x - cry.x, player.y - cry.y) < player.radius + cry.size) {
+                    score++;
+                    gameSpeed += 0.18;
+                    document.getElementById('score').innerText = score;
+                    createExplosion(cry.x, cry.y, cry.color);
+                    crystals.splice(j, 1);
+                    continue;
+                }
+
+                if (cry.x + cry.size < 0) crystals.splice(j, 1);
+            }
+
+            // 5. Частицы взрыва
+            for (let k = particles.length - 1; k >= 0; k--) {
+                let p = particles[k];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.alpha -= 0.02;
+                if (p.alpha <= 0) {
+                    particles.splice(k, 1);
+                    continue;
+                }
+                ctx.save();
+                ctx.globalAlpha = p.alpha;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            // 6. Экран Game Over и Кнопка "Заново" прямо внутри Canvas
+            if (isGameOver) {
+                // Затемнение экрана
+                ctx.fillStyle = 'rgba(5, 5, 8, 0.75)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Текст поражения
+                ctx.fillStyle = '#ff0055';
+                ctx.font = 'bold 30px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#ff0055';
+                ctx.fillText('ИГРА ОКОНЧЕНА', canvas.width / 2, canvas.height / 2 - 50);
+
+                // Сброс тени для кнопки
+                ctx.shadowBlur = 0;
+
+                // Координаты центрирования кнопки
+                restartBtnBox.x = canvas.width / 2 - restartBtnBox.w / 2;
+                restartBtnBox.y = canvas.height / 2 + 10;
+
+                // Рисуем кнопку
+                ctx.fillStyle = '#00f2fe';
+                ctx.beginPath();
+                ctx.roundRect(restartBtnBox.x, restartBtnBox.y, restartBtnBox.w, restartBtnBox.h, 25);
+                ctx.fill();
+
+                // Текст на кнопке
+                ctx.fillStyle = '#050508';
+                ctx.font = 'bold 16px sans-serif';
+                ctx.fillText('НАЧАТЬ ЗАНОВО', canvas.width / 2, canvas.height / 2 + 41);
+            }
+
+            requestAnimationFrame(update);
+        }
+
+        function gameOver() {
+            isGameOver = true;
+            if (score > bestScore) {
+                bestScore = score;
+                localStorage.setItem('cyberDashBest', bestScore);
+                document.getElementById('bestScore').innerText = bestScore;
+            }
+        }
+
+        function resetGame() {
+            score = 0;
+            gameSpeed = 4.5;
+            globalTime = 0;
+            obstacles = [];
+            crystals = [];
+            particles = [];
+            player.trail = [];
+            player.y = canvas.height / 2;
+            player.velocity = 0;
+            isGameOver = false;
+            document.getElementById('score').innerText = score;
+        }
+
+        update();
+    </script>
+</body>
+</html>
